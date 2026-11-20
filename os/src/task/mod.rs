@@ -23,6 +23,8 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+const TRACE_MAP_COUNT: usize = 474; // SYSCALL_CONDVAR_WAIT = 473
+
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -45,6 +47,8 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    /// trace count
+    trace_map: [[isize; TRACE_MAP_COUNT]; MAX_APP_NUM],
 }
 
 lazy_static! {
@@ -65,6 +69,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    trace_map: [[0; TRACE_MAP_COUNT]; MAX_APP_NUM],
                 })
             },
         }
@@ -72,6 +77,20 @@ lazy_static! {
 }
 
 impl TaskManager {
+    fn add_trace_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let task_id = inner.current_task;
+        if let Some(value) = inner.trace_map[task_id].get_mut(syscall_id) {
+            *value += 1;
+        }
+    }
+    fn read_trace_count(&self, syscall_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        if let Some(value) = inner.trace_map[inner.current_task].get(syscall_id) {
+            return value.clone();
+        }
+        -1
+    }
     /// Run the first task in task list.
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).
@@ -135,6 +154,17 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+}
+
+/// Read syscall use count,
+/// if over, will return -1.
+pub fn read_trace_count(syscall_id: usize) -> isize {
+    TASK_MANAGER.read_trace_count(syscall_id)
+}
+
+/// Make syscall use count plus one
+pub fn add_trace_count(syscall_id: usize) {
+    TASK_MANAGER.add_trace_count(syscall_id);
 }
 
 /// Run the first task in task list.

@@ -1,7 +1,10 @@
 //! Implementation of physical and virtual address and page number.
 use super::PageTableEntry;
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
-use core::fmt::{self, Debug, Formatter};
+use core::{
+    fmt::{self, Debug, Formatter},
+    ops::Add,
+};
 /// physical address
 const PA_WIDTH_SV39: usize = 56;
 const VA_WIDTH_SV39: usize = 39;
@@ -21,8 +24,16 @@ pub struct PhysPageNum(pub usize);
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VirtPageNum(pub usize);
 
-/// Debugging
+/// op
+impl Add for VirtPageNum {
+    type Output = Self;
 
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+/// Debugging
 impl Debug for VirtAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!("VA:{:#x}", self.0))
@@ -47,7 +58,6 @@ impl Debug for PhysPageNum {
 /// T: {PhysAddr, VirtAddr, PhysPageNum, VirtPageNum}
 /// T -> usize: T.0
 /// usize -> T: usize.into()
-
 impl From<usize> for PhysAddr {
     fn from(v: usize) -> Self {
         Self(v & ((1 << PA_WIDTH_SV39) - 1))
@@ -173,6 +183,11 @@ impl PhysAddr {
     /// Get the mutable reference of physical address
     pub fn get_mut<T>(&self) -> &'static mut T {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
+    }
+    ///Get immutable reference to `PhysAddr` value
+    /// Get the immutable reference of physical address
+    pub fn get<T>(&self) -> &'static T {
+        unsafe { (self.0 as *const T).as_ref().unwrap() }
     }
 }
 impl PhysPageNum {

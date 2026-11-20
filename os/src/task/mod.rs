@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, PageTableEntry, PhysAddr, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -153,6 +154,54 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get a syscall use count
+    fn get_syscall_count(&self, id: usize) -> isize {
+        let inner = TASK_MANAGER.inner.exclusive_access();
+        let tcb = &inner.tasks[inner.current_task];
+        if let Some(count) = tcb.trace_map.get(id) {
+            return count.clone();
+        }
+        -1
+    }
+
+    /// Add a syscall use count
+    fn add_syscall_count(&self, id: usize) {
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let cur = inner.current_task;
+        let tcb = &mut inner.tasks[cur];
+        if let Some(count) = tcb.trace_map.get_mut(id) {
+            *count += 1;
+        }
+    }
+
+    /// Get current task pte from va
+    fn get_pte(&self, va: usize) -> Option<PageTableEntry> {
+        let inner = TASK_MANAGER.inner.exclusive_access();
+        let cur = inner.current_task;
+        let tcb = &inner.tasks[cur];
+        tcb.memory_set.translate(VirtAddr::from(va).floor())
+    }
+
+    fn mmap(&self, va: VirtAddr, len: usize, prot: MapPermission) -> bool {
+        let vpn = va.floor();
+        let end = vpn + VirtAddr::from(len).ceil();
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let cur = inner.current_task;
+        let tcb = &mut inner.tasks[cur];
+        let mem_set = &mut tcb.memory_set;
+        mem_set.map(vpn, end.into(), prot)
+    }
+
+    fn munmap(&self, va: VirtAddr, len: usize) -> bool {
+        let vpn = va.floor();
+        let end = vpn + VirtAddr::from(len).ceil();
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let cur = inner.current_task;
+        let tcb = &mut inner.tasks[cur];
+        let mem_set = &mut tcb.memory_set;
+        mem_set.unmap(vpn, end.into())
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +250,50 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Get current process syscall trace
+pub fn get_syscall_count(id: usize) -> isize {
+    TASK_MANAGER.get_syscall_count(id)
+}
+
+/// Add current process syscall trace count one
+pub fn add_syscall_count(id: usize) {
+    TASK_MANAGER.add_syscall_count(id);
+}
+
+/// Check VA is illege
+fn check_va(pte: PageTableEntry, writable: bool, readable: bool) -> bool {
+    pte.is_valid() && (pte.writable() || !writable) && (pte.readable() || !readable)
+}
+
+/// Get PA
+fn get_pa_from_pte(pte: PageTableEntry, va: usize) -> PhysAddr {
+    (VirtAddr::from(va).page_offset() | usize::from(pte.ppn())).into()
+}
+
+/// Try to get pa from current task
+pub fn try_getting_pa(va: usize, writable: bool, readable: bool) -> Option<PhysAddr> {
+    if let Some(pte) = TASK_MANAGER.get_pte(va) {
+        if check_va(pte, writable, readable) {
+            return Some(get_pa_from_pte(pte, va));
+        }
+    }
+    None
+}
+
+/// Get pa from current task
+pub fn get_pa(va: usize) -> PhysAddr {
+    let pte = TASK_MANAGER.get_pte(va).unwrap();
+    get_pa_from_pte(pte, va)
+}
+
+/// Map pa
+pub fn mmap(va: VirtAddr, len: usize, prot: MapPermission) -> bool {
+    TASK_MANAGER.mmap(va, len, prot)
+}
+
+/// Unmap pa
+pub fn munmap(va: VirtAddr, len: usize) -> bool {
+    TASK_MANAGER.munmap(va, len)
 }

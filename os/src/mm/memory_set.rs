@@ -236,11 +236,10 @@ impl MemorySet {
     /// shrink the area to new_end
     #[allow(unused)]
     pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
-        if let Some(area) = self
-            .areas
-            .iter_mut()
-            .find(|area| area.vpn_range.get_start() == start.floor())
-        {
+        if let Some(area) = self.areas.iter_mut().find(|area| {
+            area.vpn_range.get_start() == start.floor()
+                && area.vpn_range.get_end() >= new_end.floor()
+        }) {
             area.shrink_to(&mut self.page_table, new_end.ceil());
             true
         } else {
@@ -261,6 +260,37 @@ impl MemorySet {
         } else {
             false
         }
+    }
+
+    /// find the range is mapping
+    fn find_mapping(&self, start: VirtPageNum, end: VirtPageNum) -> bool {
+        self.areas.iter().any(move |area| {
+            let m_start = area.vpn_range.get_start();
+            let m_end = area.vpn_range.get_end();
+            (m_start >= start && m_start <= end) || (m_end >= start && m_end <= end)
+        })
+    }
+
+    /// map vpn..end to phys
+    pub fn map(&mut self, start: VirtPageNum, end: VirtPageNum, prot: MapPermission) -> bool {
+        if (prot.bits() & !0x7 != 0) || (prot.bits() & 0x7 == 0) {
+            return false;
+        }
+        if self.find_mapping(start, end) {
+            return false;
+        }
+        // TODO 物理内存不够的检查没有实现
+        self.push(
+            MapArea::new(start.into(), end.into(), MapType::Framed, prot),
+            None,
+        );
+        true
+    }
+
+    /// unmap
+    pub fn unmap(&mut self, start: VirtPageNum, end: VirtPageNum) -> bool {
+        // TODO 设置在 area 中间和跨 area的内存位置无法正常去掉
+        self.shrink_to(start.into(), end.into())
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory
@@ -376,6 +406,12 @@ bitflags! {
         const X = 1 << 3;
         ///Accessible in U mode
         const U = 1 << 4;
+    }
+}
+
+impl From<u8> for MapPermission {
+    fn from(value: u8) -> Self {
+        MapPermission { bits: value }
     }
 }
 
